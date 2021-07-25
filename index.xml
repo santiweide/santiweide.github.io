@@ -1,0 +1,178 @@
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>santiweide&#39;s Blog</title>
+    <link>https://santiweide.github.io/</link>
+    <description>Recent content on santiweide&#39;s Blog</description>
+    <generator>Hugo -- gohugo.io</generator>
+    <language>zh-cn</language>
+    <copyright>©2019 Notepadium.</copyright>
+    <lastBuildDate>Tue, 25 May 2021 22:02:15 +0800</lastBuildDate>
+    
+        <atom:link href="https://santiweide.github.io/index.xml" rel="self" type="application/rss+xml" />
+    
+    
+    <item>
+      <title>友情链接=w=</title>
+      <link>https://santiweide.github.io/friend/</link>
+      <pubDate>Sun, 25 Jul 2021 10:19:16 +0800</pubDate>
+      
+      <guid>https://santiweide.github.io/friend/</guid>
+      <description>&lt;p&gt;&lt;a href=&#34;https://whatghost.github.io/&#34;target=&#34;_blank&#34; rel=&#34;noopener noreferrer&#34;&gt;高老师&lt;/a&gt;
+&lt;/p&gt;
+</description>
+    </item>
+    
+    <item>
+      <title>Shell设计</title>
+      <link>https://santiweide.github.io/post/shell%E8%AE%BE%E8%AE%A1/</link>
+      <pubDate>Tue, 25 May 2021 22:02:15 +0800</pubDate>
+      
+      <guid>https://santiweide.github.io/post/shell%E8%AE%BE%E8%AE%A1/</guid>
+      <description></description>
+    </item>
+    
+    <item>
+      <title>定时任务调度器设计</title>
+      <link>https://santiweide.github.io/post/%E5%AE%9A%E6%97%B6%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%99%A8%E8%AE%BE%E8%AE%A1/</link>
+      <pubDate>Sat, 24 Apr 2021 14:07:54 +0800</pubDate>
+      
+      <guid>https://santiweide.github.io/post/%E5%AE%9A%E6%97%B6%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%99%A8%E8%AE%BE%E8%AE%A1/</guid>
+      <description>&lt;p&gt;如果要自己实现一个crontab，你会怎么做呢？&lt;/p&gt;
+&lt;p&gt;首先，定时任务的存储结构希望支持到点了就O(1)地获取任务&lt;/p&gt;
+&lt;p&gt;接下来考虑时间怎么做。既然是定时任务，肯定牵扯到系统时钟。如果系统时间每次改变都get_job(now_time)一下，基本上也没啥我们要做的事情了。现在假定系统时钟只给定get_system_time()接口，又该怎么实现呢？&lt;/p&gt;
+&lt;p&gt;cron定时任务在web开发中，实现特定的后台任务处理功能非常有用。系统级别的cron是分钟级别的，对某些应用可能不够用，所以有必要实现自己的crontab任务。设计如下：&lt;/p&gt;
+&lt;ol&gt;
+&lt;li&gt;场景
+秒级cron任务的下次执行时间计算为绝对时间，放在hashmap里面
+每个计算出来的时间是一个hash key，所有这个时候的任务都是hash value的链表里面的一个元素（也可以是其他的数据结构存储，比如数组，队列）&lt;/li&gt;
+&lt;/ol&gt;
+&lt;p&gt;使用libevent的秒级计时器，每秒检测一次任务，这个逻辑数语hash查询
+10w级别，甚至100w级别的内存，都不会有什么延迟&lt;/p&gt;
+&lt;p&gt;这里有一个细节，就是计时器可能有跳过一秒的问题。虽然说十一秒检查一次，实际上需要记录上次执行检查的绝对时间戳，从上次时间戳的下一秒到本次检车的时间戳，这样才不会遗漏任务。即使计时器长期只致性偶尔跳过1s&lt;/p&gt;
+&lt;p&gt;还有个问题，因为同一时间的任务放在同一个hash key里面，程序执行过程中，会有修改某个key value的问题。如果hash value的数据结构不合理，就可能修改满，或者有所开销，冲突，思索。这些问题在实现的时候需要特别注意。&lt;/p&gt;
+&lt;p&gt;最后是分布式机制的问题。&lt;/p&gt;
+&lt;p&gt;每个节点都可以接受原始的cron处理请求。接收到原始的cron注册请求之后，&lt;/p&gt;
+&lt;ol&gt;
+&lt;li&gt;可以随机找个节点记录下原始的注册请求，基于不信任客户端的原则，还需要重新分配一次节点，而不能在接受到的节点记录&lt;/li&gt;
+&lt;li&gt;接下来不断循环，执行下一次任务。&lt;/li&gt;
+&lt;/ol&gt;
+&lt;p&gt;对于任务可靠性问题，&lt;/p&gt;
+&lt;ol&gt;
+&lt;li&gt;可以记录原始cron注册请求的副本，一个集群中每个原始注册请求信息都会记录两份以上&lt;/li&gt;
+&lt;li&gt;对于等待执行的任务，也可以考虑在不同的节点写入两个副本，以便在某节点故障的时候，副本可以执行，而不会丢失任务，或者任务间隔超过设置的时间间隔的话也不会丢失任务&lt;/li&gt;
+&lt;li&gt;这样引入一个问题，需要确认某个任务的主本是否失效，是否在给定的时间执行了。可以通过主本的执行，副本的延迟检测机制
+如果检测到已经执行，修改标记不再检测
+如果检测到延迟某个时间之后，主本还没执行，就由副本来致性，并且标记一下
+如果主本恢复了的话，要检测标记是不是存在
+如果主本不能恢复，副本需要升级为主本，并且再设置一个副本
+这个时候，主本恢复时。应该是一个空的没有任务的节点。如果有任务，则可能重复任务。
+某个节点在离开集群某段时间后，需要自动清空其上的任务。&lt;/li&gt;
+&lt;/ol&gt;
+&lt;p&gt;如果某个节点下线，其上很可能包含原始的注册请求信息，这个丢失的话，问题也比较严重，
+需要对这种情况作处理。&lt;/p&gt;
+&lt;p&gt;如果不能合理的处理节点的下线，以及丢失CRON任务的功能，则无法称之为合格的分布式系统设计。&lt;/p&gt;
+</description>
+    </item>
+    
+    <item>
+      <title>About Me</title>
+      <link>https://santiweide.github.io/about/</link>
+      <pubDate>Fri, 23 Apr 2021 21:50:20 +0800</pubDate>
+      
+      <guid>https://santiweide.github.io/about/</guid>
+      <description>&lt;p&gt;你好！我是santiweide@github, OI重度爱好者，在大连理工大学就读软件工程，感兴趣的方向是分布式存储；毕业后大概要去百度做搜索模型预估了。&lt;/p&gt;
+&lt;p&gt;更新的大部分是面试的时候遇到的unsolved的问题/to find better solution的问题&lt;/p&gt;
+&lt;p&gt;自我介绍到这里就结束了，下面是一些安利。&lt;/p&gt;
+&lt;blockquote&gt;
+&lt;p&gt;Coding&lt;/p&gt;
+&lt;/blockquote&gt;
+&lt;ul&gt;
+&lt;li&gt;【想学的Programming Language】Rust&lt;/li&gt;
+&lt;li&gt;【想学什么网课】做完Software Foundation的Book1，CSAPP找到一种卡lab之后的解决方案qwq，TiDB Camp， MIT6.828, MIT6.824&lt;/li&gt;
+&lt;li&gt;【手里在坑的项目】Ray-tracing渲染器，一个简易的区块链（主要是并发控制部分还没写完，基本逻辑完事了），毕设RPC框架优化（一千种实现方法），RUST IM&lt;/li&gt;
+&lt;li&gt;【想试试啥】Vim全面转移，RSS Hub&lt;/li&gt;
+&lt;li&gt;【在看的书】DDIA（是的我看了一年）&lt;/li&gt;
+&lt;li&gt;【如果是全能选手会做什么】从硬件到软件设计一套系统，which could 解决生命存在的意义&lt;/li&gt;
+&lt;li&gt;【如果一年以内可以做一款项目会做什么】大概是效率工具吧，比如一套方便游戏开发的框架，或者快速部署啥啥啥的框架。Coding makes the world better。&lt;/li&gt;
+&lt;li&gt;【最近周围的人在干啥】UE4，AI作曲，区块链&lt;/li&gt;
+&lt;/ul&gt;
+&lt;blockquote&gt;
+&lt;p&gt;书&lt;/p&gt;
+&lt;/blockquote&gt;
+&lt;p&gt;看过的喜欢的太多了想不起来qwq，随便说点最近看的好了&amp;hellip;&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;【科幻】不锈钢老鼠，三体，1984，动物农庄，美丽新世界，发条橙，小王子&lt;/li&gt;
+&lt;li&gt;【诗】聂鲁达，林徽因，上学喜欢抄诗经&lt;/li&gt;
+&lt;li&gt;【其他】被禁锢的头脑，雨后，逃离，德川家康，撒哈拉的故事，隐身人，格列夫游记&lt;/li&gt;
+&lt;li&gt;【童话】我都喜欢哈哈哈哈&lt;/li&gt;
+&lt;li&gt;【杂志】科幻世界，GQ，周末画报，Vista看天下&lt;/li&gt;
+&lt;li&gt;作家的话，米兰昆德拉，乔治奥威尔，儒勒凡尔纳，芥川龙之介，周轶君&lt;/li&gt;
+&lt;li&gt;【想看】福柯&amp;hellip;这个真的很想看懂啊可是我看不懂啊（摔）&lt;/li&gt;
+&lt;/ul&gt;
+&lt;blockquote&gt;
+&lt;p&gt;音乐&lt;/p&gt;
+&lt;/blockquote&gt;
+&lt;p&gt;想到啥就写了啥，分类也是乱分&amp;gt; &amp;lt;&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;【中国/港澳台】卢凯彤，Supper Moment，KiriT，周国贤，my liitle airport，麦浚龙，范忆堂，小老虎&lt;/li&gt;
+&lt;li&gt;【日本】凛として时雨，ゆらゆら帝国，EPO Work，宇多田ヒカル，坂本龍一，Kotaro Oshio，玉置浩二&lt;/li&gt;
+&lt;li&gt;【韩国】Dreamcatcher，Taeyeon&lt;/li&gt;
+&lt;li&gt;【欧美】史逸欣，linkin park, maroon 5其他的听得比较杂好像没啥特别专门听的&lt;/li&gt;
+&lt;/ul&gt;
+&lt;blockquote&gt;
+&lt;p&gt;动画&lt;/p&gt;
+&lt;/blockquote&gt;
+&lt;p&gt;很多想不起来了qwq&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;【美国】Midnight Gospel, Family Guy, American Dad，加菲猫，Snoopy&lt;/li&gt;
+&lt;li&gt;【日本】Psycho Pass, JOJO，Bleach&lt;/li&gt;
+&lt;/ul&gt;
+&lt;blockquote&gt;
+&lt;p&gt;电影or电视剧&lt;/p&gt;
+&lt;/blockquote&gt;
+&lt;ul&gt;
+&lt;li&gt;
+&lt;p&gt;伊朗导演一生推~~~看了一些东欧的片子也觉得蛮不错的。&lt;/p&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;【有喜欢的颜吗】喜欢梁洛施hhh&lt;/p&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;【有专门看过的导演】王家卫，伍迪艾伦，希区柯克，周美玲&lt;/p&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;【随意安利一点日剧】下辈子我再好好过，17.3about sex&lt;/p&gt;
+&lt;/li&gt;
+&lt;/ul&gt;
+&lt;blockquote&gt;
+&lt;p&gt;同人&lt;/p&gt;
+&lt;/blockquote&gt;
+&lt;ul&gt;
+&lt;li&gt;
+&lt;p&gt;&lt;a href=&#34;https://awochirp.github.io/&#34;target=&#34;_blank&#34; rel=&#34;noopener noreferrer&#34;&gt;只看awochirp太太（不是）&lt;/a&gt;
+&lt;/p&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;自己也有剪过一丢丢视频，&lt;a href=&#34;https://space.bilibili.com/159257029&#34;target=&#34;_blank&#34; rel=&#34;noopener noreferrer&#34;&gt;bilibili&lt;/a&gt;
+；&lt;a href=&#34;https://www.youtube.com/channel/UCrKwiN1JrXCggSw3umcUFmw&#34;target=&#34;_blank&#34; rel=&#34;noopener noreferrer&#34;&gt;Youtube&lt;/a&gt;
+&lt;/p&gt;
+&lt;/li&gt;
+&lt;/ul&gt;
+&lt;blockquote&gt;
+&lt;p&gt;正在干什么&lt;/p&gt;
+&lt;/blockquote&gt;
+&lt;p&gt;正在爆肝毕业设计RPC框架&amp;gt; &amp;lt;&lt;/p&gt;
+&lt;blockquote&gt;
+&lt;p&gt;最近发生了什么&lt;/p&gt;
+&lt;/blockquote&gt;
+&lt;p&gt;最近在思考人生&amp;hellip;如果生命是一堆的问题，有没有改变命运的咒语——（关掉音响）&lt;/p&gt;
+&lt;p&gt;咳咳，还有一个月就要毕业了，真的很感谢遇到的大家，承蒙照顾了（鞠躬）。我也会好好珍惜这最后的一个月的！希望留下更多回忆w&lt;/p&gt;
+&lt;blockquote&gt;
+&lt;p&gt;最后想说点什么吗&lt;/p&gt;
+&lt;/blockquote&gt;
+&lt;p&gt;没啥想说的，非要说的话讲个笑话吧（烂死）&lt;/p&gt;
+</description>
+    </item>
+    
+  </channel>
+</rss>

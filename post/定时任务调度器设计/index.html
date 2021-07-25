@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en"><meta charset="utf-8"><meta name="generator" content="Hugo 0.82.1" /><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="supported-color-schemes" content="light dark"><title>定时任务调度器设计&nbsp;&ndash;&nbsp;santiweide&#39;s Blog</title><link rel="stylesheet" href="/css/core.min.7aa9d4cc04ba4a82c92b7646faa3856d1ab5b339e635dde4d873668e74feeaea520ef4746058ac8a8526f8c66462907f.css" integrity="sha384-eqnUzAS6SoLJK3ZG&#43;qOFbRq1sznmNd3k2HNmjnT&#43;6upSDvR0YFisioUm&#43;MZkYpB/"><meta name="twitter:card" content="summary" />
+<meta name="twitter:title" content="定时任务调度器设计" /><body><section id="header">
+    <div class="header wrap"><span class="header left-side"><a class="site home" href="/"><span class="site name">santiweide's Blog</span></a></span>
+        <span class="header right-side"><div class="nav wrap"><nav class="nav"><a class="nav item" href="/categories/">Categories</a><a class="nav item" href="/tags/">Tags</a><a class="nav item" href="/about">About</a><a class="nav item" href="/friend">友链</a><a class="nav item" href="https://gohugo%2eio/"target="_blank" rel="noopener noreferrer">Hugo</a></nav></div></span></div><div class="site slogan"><span class="title">Anything But Ordinary</span></div></section><section id="content"><div class="article-container"><section class="article header">
+    <h1 class="article title">定时任务调度器设计</h1><p class="article date">Saturday, April 24, 2021</p></section><article class="article markdown-body"><p>如果要自己实现一个crontab，你会怎么做呢？</p>
+<p>首先，定时任务的存储结构希望支持到点了就O(1)地获取任务</p>
+<p>接下来考虑时间怎么做。既然是定时任务，肯定牵扯到系统时钟。如果系统时间每次改变都get_job(now_time)一下，基本上也没啥我们要做的事情了。现在假定系统时钟只给定get_system_time()接口，又该怎么实现呢？</p>
+<p>cron定时任务在web开发中，实现特定的后台任务处理功能非常有用。系统级别的cron是分钟级别的，对某些应用可能不够用，所以有必要实现自己的crontab任务。设计如下：</p>
+<ol>
+<li>场景
+秒级cron任务的下次执行时间计算为绝对时间，放在hashmap里面
+每个计算出来的时间是一个hash key，所有这个时候的任务都是hash value的链表里面的一个元素（也可以是其他的数据结构存储，比如数组，队列）</li>
+</ol>
+<p>使用libevent的秒级计时器，每秒检测一次任务，这个逻辑数语hash查询
+10w级别，甚至100w级别的内存，都不会有什么延迟</p>
+<p>这里有一个细节，就是计时器可能有跳过一秒的问题。虽然说十一秒检查一次，实际上需要记录上次执行检查的绝对时间戳，从上次时间戳的下一秒到本次检车的时间戳，这样才不会遗漏任务。即使计时器长期只致性偶尔跳过1s</p>
+<p>还有个问题，因为同一时间的任务放在同一个hash key里面，程序执行过程中，会有修改某个key value的问题。如果hash value的数据结构不合理，就可能修改满，或者有所开销，冲突，思索。这些问题在实现的时候需要特别注意。</p>
+<p>最后是分布式机制的问题。</p>
+<p>每个节点都可以接受原始的cron处理请求。接收到原始的cron注册请求之后，</p>
+<ol>
+<li>可以随机找个节点记录下原始的注册请求，基于不信任客户端的原则，还需要重新分配一次节点，而不能在接受到的节点记录</li>
+<li>接下来不断循环，执行下一次任务。</li>
+</ol>
+<p>对于任务可靠性问题，</p>
+<ol>
+<li>可以记录原始cron注册请求的副本，一个集群中每个原始注册请求信息都会记录两份以上</li>
+<li>对于等待执行的任务，也可以考虑在不同的节点写入两个副本，以便在某节点故障的时候，副本可以执行，而不会丢失任务，或者任务间隔超过设置的时间间隔的话也不会丢失任务</li>
+<li>这样引入一个问题，需要确认某个任务的主本是否失效，是否在给定的时间执行了。可以通过主本的执行，副本的延迟检测机制
+如果检测到已经执行，修改标记不再检测
+如果检测到延迟某个时间之后，主本还没执行，就由副本来致性，并且标记一下
+如果主本恢复了的话，要检测标记是不是存在
+如果主本不能恢复，副本需要升级为主本，并且再设置一个副本
+这个时候，主本恢复时。应该是一个空的没有任务的节点。如果有任务，则可能重复任务。
+某个节点在离开集群某段时间后，需要自动清空其上的任务。</li>
+</ol>
+<p>如果某个节点下线，其上很可能包含原始的注册请求信息，这个丢失的话，问题也比较严重，
+需要对这种情况作处理。</p>
+<p>如果不能合理的处理节点的下线，以及丢失CRON任务的功能，则无法称之为合格的分布式系统设计。</p>
+</article><section class="article labels"><a class="tag" href=/tags/%E8%AE%BE%E8%AE%A1/>设计</a></section>
+</div>
+<div class="article bottom"><section class="article navigation"><p><a class="link" href="/post/shell%E8%AE%BE%E8%AE%A1/"><span class="iconfont icon-article"></span>Shell设计</a></p></section></div></section><section id="footer"><div class="footer-wrap">
+    <p class="copyright">©2019 Notepadium.</p>
+    <p class="powerby"><span>Powered&nbsp;by&nbsp;</span><a href="https://gohugo.io" 
+        target="_blank" rel="noopener noreferrer">Hugo</a><span>&nbsp;&amp;&nbsp;</span><a href="https://themes.gohugo.io/hugo-notepadium/" 
+        target="_blank" rel="noopener noreferrer">Notepadium</a>
+<a href='https://ipv6-test.com/validate.php?url=referer'
+  ><img src='https://ipv6-test.com/button-ipv6-80x15.png' 
+        alt='ipv6 ready' title='ipv6 ready' border='0' 
+/></a>
+</p></div>
+</section></body>
+
+</html>
