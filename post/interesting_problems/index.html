@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en"><meta charset="utf-8"><meta name="generator" content="Hugo 0.82.1" /><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="supported-color-schemes" content="light dark"><title>有趣数学题(s)&nbsp;&ndash;&nbsp;santiweide&#39;s Blog</title><link rel="stylesheet" href="/css/core.min.7aa9d4cc04ba4a82c92b7646faa3856d1ab5b339e635dde4d873668e74feeaea520ef4746058ac8a8526f8c66462907f.css" integrity="sha384-eqnUzAS6SoLJK3ZG&#43;qOFbRq1sznmNd3k2HNmjnT&#43;6upSDvR0YFisioUm&#43;MZkYpB/"><meta name="twitter:card" content="summary" />
+<meta name="twitter:title" content="有趣数学题(s)" /><body><section id="header">
+    <div class="header wrap"><span class="header left-side"><a class="site home" href="/"><span class="site name">santiweide's Blog</span></a></span>
+        <span class="header right-side"><div class="nav wrap"><nav class="nav"><a class="nav item" href="/categories/">Categories</a><a class="nav item" href="/tags/">Tags</a><a class="nav item" href="/about">About</a><a class="nav item" href="/friend">友链</a><a class="nav item" href="https://gohugo%2eio/"target="_blank" rel="noopener noreferrer">Hugo</a></nav></div></span></div><div class="site slogan"><span class="title">Anything But Ordinary</span></div></section><section id="content"><div class="article-container"><section class="article header">
+    <h1 class="article title">有趣数学题(s)</h1><p class="article date">Friday, April 23, 2021</p></section><article class="article markdown-body"><h2 id="谁是ceo">谁是CEO？</h2>
+<blockquote>
+<p>现在有函数f(a,b)={true , false}，a,b属于有限集合A，已知A集合里面有个元素CEO满足对于任意a属于A，f(CEO,a)=false, 但是f(a,X)=true，怎么调用最少次数的f求出来CEO是啥呢</p>
+</blockquote>
+<p>正常版本： 某公司里面ceo谁也不认识，其他人都认识ceo；求ceo。</p>
+<p>其他名字：社会名流</p>
+<h3 id="思路-ceo存在于所有人认识的人的交集">思路 CEO存在于所有人认识的人的交集</h3>
+<p>既然是交集，选一个人x来询问其他人x认不认得的话，可以得到x的朋友圈。此时ceo一定在x的朋友圈里面。
+如果朋友圈里面有人有认识的人，那那个人一定不是ceo。</p>
+<p>最坏情况是x的朋友圈是全公司的人，这意味着每次加人近朋友圈的时候应该尽可能保证加进来的人不认识其他人。</p>
+<p>这个解法在稀疏图里面比较奏效，因为朋友圈比较小，可以快速锁定ceo。</p>
+<ol>
+<li>i = 1-&gt;n, if f(x,i)==1, x = i;</li>
+<li>check if x is CEO</li>
+</ol>
+<h3 id="tbc">TBC</h3>
+</article><section class="article labels"><a class="tag" href=/tags/%E6%95%B0%E5%AD%A6/>数学</a></section>
+</div>
+<div class="article bottom"><section class="article navigation"><p><a class="link" href="/post/hackpku2021_reflection/"><span class="iconfont icon-article"></span>Hackpku2021 Reflection</a></p><p><a class="link" href="/post/liz_and_the_blue_bird_reflection/"><span class="iconfont icon-article"></span>【观后感】利兹与青鸟</a></p></section></div></section><section id="footer"><div class="footer-wrap">
+    <p class="copyright">©2019 Notepadium.</p>
+    <p class="powerby"><span>Powered&nbsp;by&nbsp;</span><a href="https://gohugo.io" 
+        target="_blank" rel="noopener noreferrer">Hugo</a><span>&nbsp;&amp;&nbsp;</span><a href="https://themes.gohugo.io/hugo-notepadium/" 
+        target="_blank" rel="noopener noreferrer">Notepadium</a>
+<a href='https://ipv6-test.com/validate.php?url=referer'
+  ><img src='https://ipv6-test.com/button-ipv6-80x15.png' 
+        alt='ipv6 ready' title='ipv6 ready' border='0' 
+/></a>
+</p></div>
+</section></body>
+
+</html>
