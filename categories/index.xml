@@ -150,25 +150,6 @@ She says she do it again
     </item>
     
     <item>
-      <title>大空头</title>
-      <link>https://santiweide.github.io/post/the_big_short/</link>
-      <pubDate>Sun, 06 Feb 2022 08:40:03 +0800</pubDate>
-      
-      <guid>https://santiweide.github.io/post/the_big_short/</guid>
-      <description>&lt;p&gt;曾几何时银行证券是一些并不出名的行业，直到房屋证券带起来一波金融热潮。但是，2008年，房产市场崩溃，很多房贷都违约了；欺诈性的利率达到了30年来的最高点，&lt;/p&gt;
-&lt;p&gt;房贷利率泡沫来自哪里呢？竟然是来自无度放贷&amp;hellip;&amp;hellip;&lt;/p&gt;
-&lt;p&gt;打包房贷的证券律师才会看证券里面的房贷具体有什么&amp;hellip;the whole package&lt;/p&gt;
-&lt;p&gt;因为被评估低风险的房产证券，其实是高风险的，内部有很多银行利滚利制造的风险假象，所以会有破碎的一天。所以Micheal要做空&lt;/p&gt;
-&lt;p&gt;CDO：担保债权凭证 Collateralized Debt Obligation&lt;/p&gt;
-&lt;p&gt;微信支付信用分会用于其他地方吗？&lt;/p&gt;
-&lt;p&gt;操盘手&amp;hellip;Micheal&amp;hellip;&amp;hellip;&lt;/p&gt;
-&lt;p&gt;每个人都在内心深处期盼着世界末日的到来。&lt;/p&gt;
-&lt;p&gt;最后&amp;hellip;虽然买了做空的股票，但是也没有办法卖出去。&lt;/p&gt;
-&lt;p&gt;音乐喜欢，要做歌单~~但是感觉还是会二刷因为陌生名词有点多&amp;hellip;.占坑&lt;/p&gt;
-</description>
-    </item>
-    
-    <item>
       <title>第一次遇见花香的那刻</title>
       <link>https://santiweide.github.io/post/1st_flower/</link>
       <pubDate>Sat, 05 Feb 2022 09:27:24 +0800</pubDate>
@@ -579,6 +560,23 @@ Jet放弃当警车的原因或许将在这集揭晓&amp;hellip;
 杜小凤的执着，究竟是对这个无意义世界的绝望，还是世界上美好的追逐呢&amp;hellip;如果刘以洁是最后的美好，那这个美好又是什么呢&amp;hellip;&amp;hellip;刘以洁若是没有那么禁欲，杜小凤还会被吸引吗？&lt;/p&gt;
 &lt;p&gt;相信杜小凤也不愿意伤害孟烨吧，宁可自己死掉也不愿意伤害别人，这才是小凤哥。不愿意因为没有爱的人受伤，但是愿意为有爱的人坐牢甚至去世。很浪漫啊。
 刘以洁泛滥的爱却搭配了节制到禁欲的身体，孟烨对身体放得很开却一直追求爱与被爱，小凤却是精神一个出度为1的节点：身体上，杜小凤在等待刘以洁；精神上，孟烨在等待杜小凤；刘以洁为杜小凤的等待苦恼，这超过了自己圣母之爱的理解范围；孟烨为杜小凤眼里只有刘以洁回应苦恼，感觉人间不值得&amp;hellip;&amp;hellip;这样子会死锁的吧&amp;hellip;.&lt;/p&gt;
+</description>
+    </item>
+    
+    <item>
+      <title>Hackpku2021</title>
+      <link>https://santiweide.github.io/post/hackpku2021_reflection/</link>
+      <pubDate>Tue, 11 May 2021 09:51:25 +0800</pubDate>
+      
+      <guid>https://santiweide.github.io/post/hackpku2021_reflection/</guid>
+      <description>&lt;h2 id=&#34;自白&#34;&gt;自白&lt;/h2&gt;
+&lt;p&gt;有幸和一群大佬打了hackthon~选择了一个偏业务的题目，借助题目所给的青云数据库做了一个校园大众点评MyCanteen。自己在其中主要负责青云平台的项目接入，以及web后端SpringBoot的开发。&lt;/p&gt;
+&lt;p&gt;如果hackathon的四十八小时拍成电影，观感大概是故事性有余，文学性不足——大部分时间在做业务逻辑的保证，研究新功能的设计，讨论UI之类，和队友沟（吐）通（槽）；工整虽工整，然而不管是青云数据库的运用，还是业务本身，都没啥特别的地方。因此评奖的时候也没有很多期待，反而是很欣赏其余队伍的作品。好想复现大家的项目啊。&lt;/p&gt;
+&lt;p&gt;如果说长时间写代码总是带着不可避免地熵增（原因比如体力下降，注意力下降之类），那测试联调就是一种用更多时间克服熵增的过程。一旦想好了点子，一切都变成了业务代码的克服熵增马拉松。如果说大佬和我等常人有区别，一个是点子的区别，另一个大概是熵增速度会慢很多吧。如何减缓熵增速度，一个是更加熟练，让写出正确代码成为一种习惯；另一种就是提高注意力和投入度吧，总之还需要不断学习&amp;hellip;&amp;hellip;&lt;/p&gt;
+&lt;h2 id=&#34;队友&#34;&gt;队友&lt;/h2&gt;
+&lt;p&gt;这次组队，自己和队友们是第一次合作。因为UI和前后端都比较熟练，开发流程也还算规范，即使业务代码写着很累，一想到自己还有队友们，也就不会放弃了。也有很多要向队友学习的地方，比如需要形成UI设计和前端开发的完整工具链。这一次远程协作也感受到沟通的重要性，自己作为后端负责人除了给自己安排任务，也需要通览全部任务，对每个流程在一开始都有大致思路，才能更好地给其他同学分配任务。话说感觉自己的开源社区实在是没啥贡献啊，好担心去了外企自己会荒废&amp;hellip;..不如直接拼多多996算了qwq&lt;/p&gt;
+&lt;h2 id=&#34;认知的边界&#34;&gt;认知的边界&lt;/h2&gt;
+&lt;p&gt;总之，不管是技术，还是社交，还是其他的什么，感觉都存在一种边界吧。边界之内，感知不到下一个边界的人在克服熵增，能感知到下一个边界的人在困顿痛苦地克服熵增；而到达边界之外的人往往还有下一个边界&amp;hellip;&amp;hellip;太弱小了&amp;hellip;&amp;hellip;&lt;/p&gt;
 </description>
     </item>
     
