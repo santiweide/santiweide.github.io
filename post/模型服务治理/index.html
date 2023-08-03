@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en"><meta charset="utf-8"><meta name="generator" content="Hugo 0.104.3" /><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="supported-color-schemes" content="light dark"><title>模型服务治理&nbsp;&ndash;&nbsp;santiweide&#39;s Blog</title><link rel="stylesheet" href="/css/core.min.b3e6c662ee02bbf1cc9b9c5d72d43b6ed1c5346f792f51d104e39f8421a8029b5119df1cc9b1165b003b229f1cbf9dd4.css" integrity="sha384-s&#43;bGYu4Cu/HMm5xdctQ7btHFNG95L1HRBOOfhCGoAptRGd8cybEWWwA7Ip8cv53U"><meta name="twitter:card" content="summary" />
+<meta name="twitter:title" content="模型服务治理" /><body><section id="header">
+    <div class="header wrap"><span class="header left-side"><a class="site home" href="/"><span class="site name">santiweide's Blog</span></a></span>
+        <span class="header right-side"><div class="nav wrap"><nav class="nav"><a class="nav item" href="/tags/">Tags</a><a class="nav item" href="/about">About</a><a class="nav item" href="/friend">友链</a><a class="nav item" href="https://gohugo%2eio/"target="_blank" rel="noopener noreferrer">Hugo</a></nav></div></span></div><div class="site slogan"><span class="title">露の世は露の世ながらさりながら</span></div></section><section id="content"><div class="article-container"><section class="article header">
+    <h1 class="article title">模型服务治理</h1><p class="article date">Friday, July 21, 2023</p></section><article class="article markdown-body"><h1 id="模型服务治理">模型服务治理</h1>
+<p><strong>背景</strong></p>
+<p>mxps目前线上版本分布很多，不同app是不同的模型 &amp; mxps版本，也有一些存量的tarot agent。当mxps需要版本升级的时候，有以下几种情况：</p>
+<p><strong>迭代场景1 paddle新tag接入</strong></p>
+<p><strong>预估方式1</strong> paddle原生预估（调用cudnn，cuda接口）</p>
+<p><strong>预估方式2</strong> tensorRT预估（paddle-trt-cudnn/cuda）</p>
+<p><strong>case1</strong> paddle tag升级，cudnn &amp; cuda &amp; tensorRT版本不变</p>
+<p>直接修改ie &amp; mxps的BCLOUD paddle tag</p>
+<p><strong>case2</strong> tensorRT升级</p>
+<p>检查tensorrt官方推荐的cudnn/cuda版本（下载编译产出的时候有官方打包的版本，连带cudnn和cuda版本一起指定了。）</p>
+<p>如果cudnn和cudan版本和tensorrt编译的时候指定的不一样，需要用源代码重新编译tensorrt</p>
+<p>然后paddle联合新版本tensorRT，cuda，cudnn一起编译。</p>
+<p>注意，cuda，cudnn升级的时候，需要check cuda兼容的内核版本是否和运行时环境相匹配。（编译的时候应该不要求）</p>
+<p><strong>回归方法</strong>：选择多个模型，stable（看精度diff） &amp; perf diff（看新老版本性能diff）</p>
+<p><strong>迭代场景2 策略预处理/后处理插件开发</strong></p>
+<p><strong>回归方法</strong>：验证插件对应模型，stable（看精度diff） &amp; perf（看性能，预估资源）</p>
+<p><strong>迭代场景3 mxps依赖的静态库有升级</strong></p>
+<p>这个场景针对的是ctr模型。因为山原架构下的ctr模型在mxps预处理的时候，用到了inferface仓库定义的特征明文字段，以及mxfeat仓库定义的特征抽取逻辑，所以策略会：</p>
+<p>1.interface开发，合入stable分支</p>
+<p>2.mxfeat开发，合入stable分支</p>
+<p>3.mxps重新编译</p>
+<p><strong>回归方法</strong>：验证依赖库对应模型，stable（看精度diff） &amp; perf（看性能，预估资源）</p>
+<p><strong>版本收敛 &amp; mxps算子化</strong></p>
+<p>如果希望mxps版本收敛，则需要mxps版本迭代尽量变少。其实，不是所有模型都会遇到以上3钟迭代场景。</p>
+<p>比如，对于场景3，就只有ctr预估模型会遇到，因此可以给ctr模型的mxps建立一个统一的上线单（批量上线单）。</p>
+<p>对于场景2，我们可以通过策略预处理插件&amp;后处理插件和mxps架构代码迭代解耦来实现。对此有两种思路，分别对应静态库和动态库的拆解：</p>
+<ol>
+<li>策略代码由单独代码库维护，mxps以静态库形式依赖。每次策略迭代后，mxps重新编译，统一上线到所有mxps</li>
+<li>策略代码由单独代码库维护，mxps以动态库形式依赖。每次策略迭代后，mxps数据处理插件的动态库跟随模型配送到mxps部署路径的模型目录，mxps通过dlopen加载动态库获取运行时需要的符号表。</li>
+</ol>
+<p>针对场景2的优化也称之为<strong>mxps算子化。</strong></p>
+<p>对于场景1，因为迭代的时候已经做了批量回归，如果批量回归ok的话，直接上线到所有mxps是没有问题的。但是，如果批量回归有问题的话，还是需要投入人力case by case地解决。</p>
+<p><strong>批量回归机制</strong></p>
+<p>回归包括两个部分，一个是可以加载模型启动，另一个是可以进行预估计算。</p>
+<p>加载模型可能遇到的问题包括：</p>
+<ol>
+<li>无法识别的模型定义op</li>
+<li>显存不够&hellip;等其他资源不够</li>
+</ol>
+<p>预估计算可能遇到的问题包括：</p>
+<ol>
+<li>输入shape对应的kernel没有被实现</li>
+<li>经过计算图优化之后的模型存在一些为定义的shape（维度是-1）</li>
+<li>某op输入的数据类型和模型定义不匹配</li>
+</ol>
+<p>以上问题，可以先排查mxps输入数据shape &amp; id range，如果没有问题的话，就得从paddle往下排查了。</p>
+<p>当然我们现在还没有一个批量回归机制，msp也不支持得分diff分布统计，只能给出query维度的diff比例统计。后续还需要推动msp一起看下这里。另外，即使msp支持float类型的diff分布统计，因为tarot 的mxps_builder中指定的response_type不完全是FLOATS，也会有输出为序列化结果的情况，增加比diff的难度。</p>
+<p><strong>其他</strong></p>
+<p>目前mxps master分支已知问题：</p>
+<ol>
+<li>不兼容存算分离（dqa有一个R200模型依赖，目前策略迭代需要合入master分支 &amp; 老版本分支，比较麻烦）</li>
+<li>K200&amp;R200存在精度diff，这种精度diff会影响线上bs=1&amp;&amp;开动态batch的模型，以及上游自己组batch的模型。精度diff来源有3个：
+<ol>
+<li>量化scale：因为昆仑默认计算精度是fp16，在量化scale选择的时候，会有per tensor，per batch，per head三种策略，在batch size&gt;1的时候，同一个请求选择scale的策略可能会不同，输入tensor量化后结果不同，导致模型计算结果精度不同。</li>
+<li>kernel选择：不同query在不同batch中的时候，所在的tensor的batch size不同，会导致选择的计算kernel不同。基于kernel的实现差异，也会引起精度diff。</li>
+<li>命中L3 cache的请求和没有命中L3 cache的请求计算结果不同。</li>
+</ol>
+</li>
+<li>OMIA编译分支*其实可以优化一部分代码。我编译了一个paddle develop+trt7的编译依赖，从此paddle版本不再落后，但是这个还在ie和mxps的分支上，提供给da sexy query recognition模型做在线服务；在想找个时候合入主干。</li>
+<li>ernie3.0模型，mxps master分支不太支持</li>
+<li>fast transformer模型，mxps master分支不太支持</li>
+</ol>
+<ul>
+<li>OMIA编译分支存在的背景</li>
+</ul>
+<p>因为T4内核驱动版本较老，最高只能跑到cuda10.x，于是和A10的cuda11的编译依赖区分开了。又因为当时paddle接口比较老，还是paddle1.8的，于是也通过编译选项指定了一些接口兼容。</p>
+<p><strong>结论</strong></p>
+<p>从以上来看，mxps如果希望做版本统一，依赖一个完善的批量回归机制，mxps算子化改造，或者针对某些不频繁迭代paddle tag的模型单独配置tower上线单进行部分版本收敛。同时也有一些特殊需求的模型，暂时在分支上线，迭代不频繁的情况下，感觉也可以延迟合入主干。</p>
+</article>
+</div>
+<div class="article bottom"><section class="article navigation"><p><a class="link" href="/post/2023.7.21/"><span class="iconfont icon-article"></span>一些近况</a></p><p><a class="link" href="/post/gpt%E6%98%AF%E6%88%91%E7%9A%84%E6%83%85%E6%84%9F%E5%A7%90%E5%A7%90/"><span class="iconfont icon-article"></span>gpt还是很赞的</a></p></section></div></section><section id="footer"><div class="footer-wrap">
+    <p class="copyright">©2019 Notepadium.</p>
+    <p class="powerby"><span>Powered&nbsp;by&nbsp;</span><a href="https://gohugo.io" 
+        target="_blank" rel="noopener noreferrer">Hugo</a><span>&nbsp;&amp;&nbsp;</span><a href="https://themes.gohugo.io/hugo-notepadium/" 
+        target="_blank" rel="noopener noreferrer">Notepadium</a>
+<a href='https://ipv6-test.com/validate.php?url=referer'
+  ><img src='https://ipv6-test.com/button-ipv6-80x15.png' 
+        alt='ipv6 ready' title='ipv6 ready' border='0' 
+/></a>
+</p></div>
+</section></body>
+
+</html>
