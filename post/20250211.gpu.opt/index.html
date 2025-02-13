@@ -5,7 +5,7 @@
 <meta name="twitter:title" content="快速诊断GPU性能瓶颈" /><body><section id="header">
     <div class="header wrap"><span class="header left-side"><a class="site home" href="/"><span class="site name">santiweide's Blog</span></a></span>
         <span class="header right-side"><div class="nav wrap"><nav class="nav"><a class="nav item" href="/tags/">Tags</a><a class="nav item" href="/about">About</a><a class="nav item" href="/friend">友链</a><a class="nav item" href="https://gohugo%2eio/"target="_blank" rel="noopener noreferrer">Hugo</a></nav></div></span></div><div class="site slogan"><span class="title">露の世は露の世ながらさりながら</span></div></section><section id="content"><div class="article-container"><section class="article header">
-    <h1 class="article title">快速诊断GPU性能瓶颈</h1><p class="article date">Tuesday, February 11, 2025</p></section><article class="article markdown-body"><p>GPU性能瓶颈主要分为3类：Latency Bound 延迟平静, Math Bound计算平静, Memory Bound 内存瓶颈。</p>
+    <h1 class="article title">快速诊断GPU性能瓶颈</h1><p class="article date">Tuesday, February 11, 2025</p></section><article class="article markdown-body"><p>GPU性能瓶颈主要分为3类：Latency Bound, Math Bound, Memory Bound。</p>
 <h3 id="1-诊断步骤">1 诊断步骤：</h3>
 <p><strong>1.1 评估硬件参数</strong></p>
 <ul>
@@ -76,9 +76,10 @@
 </ul>
 </li>
 </ul>
-</article>
+<p><a href="../20250213.gpu.opt.matmul/">样例：矩阵乘法</a></p>
+</article><section class="article labels"><a class="tag" href=/tags/gpu/>GPU</a></section>
 </div>
-<div class="article bottom"><section class="article navigation"><p><a class="link" href="/post/%E7%88%B1%E6%83%85%E4%B8%87%E5%B2%81-%E8%94%A1%E6%98%8E%E4%BA%AE/"><span class="iconfont icon-article"></span>爱情万岁 蔡明亮</a></p></section></div></section><section id="footer"><div class="footer-wrap">
+<div class="article bottom"><section class="article navigation"><p><a class="link" href="/post/20250213.gpu.opt.matmul/"><span class="iconfont icon-article"></span>GPU性能-矩阵乘法</a></p><p><a class="link" href="/post/%E7%88%B1%E6%83%85%E4%B8%87%E5%B2%81-%E8%94%A1%E6%98%8E%E4%BA%AE/"><span class="iconfont icon-article"></span>爱情万岁 蔡明亮</a></p></section></div></section><section id="footer"><div class="footer-wrap">
     <p class="copyright">©2019 Notepadium.</p>
     <p class="powerby"><span>Powered&nbsp;by&nbsp;</span><a href="https://gohugo.io" 
         target="_blank" rel="noopener noreferrer">Hugo</a><span>&nbsp;&amp;&nbsp;</span><a href="https://themes.gohugo.io/hugo-notepadium/" 

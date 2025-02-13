@@ -6,10 +6,296 @@
     <generator>Hugo -- gohugo.io</generator>
     <language>zh-cn</language>
     <copyright>©2019 Notepadium.</copyright>
-    <lastBuildDate>Tue, 11 Feb 2025 20:20:18 +0100</lastBuildDate>
+    <lastBuildDate>Thu, 13 Feb 2025 18:04:23 +0100</lastBuildDate>
     
         <atom:link href="https://santiweide.github.io/index.xml" rel="self" type="application/rss+xml" />
     
+    
+    <item>
+      <title>GPU性能-矩阵乘法</title>
+      <link>https://santiweide.github.io/post/20250213.gpu.opt.matmul/</link>
+      <pubDate>Thu, 13 Feb 2025 18:04:23 +0100</pubDate>
+      
+      <guid>https://santiweide.github.io/post/20250213.gpu.opt.matmul/</guid>
+      <description>&lt;!-- TOC start (generated with https://github.com/derlin/bitdowntoc) --&gt;
+&lt;ul&gt;
+&lt;li&gt;&lt;a href=&#34;#acronyms&#34;&gt;Acronyms&lt;/a&gt;&lt;/li&gt;
+&lt;li&gt;&lt;a href=&#34;#2-&#34;&gt;2 理论：计算和内存瓶颈分析&lt;/a&gt;
+&lt;ul&gt;
+&lt;li&gt;&lt;a href=&#34;#21-&#34;&gt;2.1 计算量评估&lt;/a&gt;&lt;/li&gt;
+&lt;li&gt;&lt;a href=&#34;#22-bytes&#34;&gt;2.2 内存访问量评估（Bytes）&lt;/a&gt;&lt;/li&gt;
+&lt;li&gt;&lt;a href=&#34;#23-arithmetic-intensity&#34;&gt;2.3 Arithmetic Intensity&lt;/a&gt;&lt;/li&gt;
+&lt;/ul&gt;
+&lt;/li&gt;
+&lt;li&gt;&lt;a href=&#34;#3-gpu-gemm&#34;&gt;3 GPU GEMM优化办法&lt;/a&gt;
+&lt;ul&gt;
+&lt;li&gt;&lt;a href=&#34;#31-tile-the-output&#34;&gt;3.1 Tile the Output&lt;/a&gt;&lt;/li&gt;
+&lt;li&gt;&lt;a href=&#34;#32-tensor-core&#34;&gt;3.2 Tensor Core&lt;/a&gt;&lt;/li&gt;
+&lt;li&gt;&lt;a href=&#34;#32-typical-tile-dimensions-in-cublas&#34;&gt;3.2 Typical Tile Dimensions in cuBLAS&lt;/a&gt;&lt;/li&gt;
+&lt;li&gt;&lt;a href=&#34;#tile-size&#34;&gt;3.4 tile size的影响&lt;/a&gt;&lt;/li&gt;
+&lt;/ul&gt;
+&lt;/li&gt;
+&lt;li&gt;&lt;a href=&#34;#tile-quantization&#34;&gt;Tile Quantization&lt;/a&gt;&lt;/li&gt;
+&lt;li&gt;&lt;a href=&#34;#wave-quantization&#34;&gt;Wave Quantization&lt;/a&gt;&lt;/li&gt;
+&lt;li&gt;&lt;a href=&#34;#&#34;&gt;总结&lt;/a&gt;&lt;/li&gt;
+&lt;/ul&gt;
+&lt;!-- TOC end --&gt;
+&lt;h3 id=&#34;acronyms&#34;&gt;Acronyms&lt;/h3&gt;
+&lt;p&gt;GEMMs: General Matrix Multiplications&lt;/p&gt;
+&lt;p&gt;矩阵乘法在Fully connected layers, Recurrent Layers等计算操作中广为使用，用于计算：
+&lt;code&gt;$C = \alpha AB + \beta C$&lt;/code&gt;，其中A和B是matrix inputs，&lt;code&gt;\alpha&lt;/code&gt; 和&lt;code&gt;\beta&lt;/code&gt;是scalar inputs，C是一个pre-existing matrix，未来会被计算output覆盖&lt;/p&gt;
+&lt;p&gt;FC的forward pass中，weight matrix为arguement A，activation为B，\aplha和\bate分别为1，0如果把skip-connection + linear operation加起来的话，\beta也会是1.&lt;/p&gt;
+&lt;h3 id=&#34;2-理论计算和内存瓶颈分析&#34;&gt;2 理论：计算和内存瓶颈分析&lt;/h3&gt;
+&lt;h4 id=&#34;21-计算量评估&#34;&gt;2.1 计算量评估&lt;/h4&gt;
+&lt;p&gt;Assume:&lt;/p&gt;
+&lt;pre tabindex=&#34;0&#34;&gt;&lt;code&gt;A: M * N
+B: N * K
+C: M * K
+&lt;/code&gt;&lt;/pre&gt;&lt;p&gt;则矩阵乘法C=AxB 在FMA中计算量共&lt;code&gt;M*N*K&lt;/code&gt; 次&lt;/p&gt;
+&lt;p&gt;因为每个元素&lt;code&gt;Cij&lt;/code&gt;需要累加N次乘法，每次取A的一行和B的一列相乘。而C一共有&lt;code&gt;M*K&lt;/code&gt;个元素，所以一共的操作数是&lt;code&gt;M*N*K&lt;/code&gt;&lt;/p&gt;
+&lt;p&gt;每个FMA包含1次乘法1次加法，共 &lt;code&gt;2*M*N*K&lt;/code&gt; FLOPS&lt;/p&gt;
+&lt;h4 id=&#34;22-内存访问量评估bytes&#34;&gt;2.2 内存访问量评估（Bytes）&lt;/h4&gt;
+&lt;p&gt;输入数据：load A （MxK元素）和B（KxN元素）
+输出数据：write C（MxN元素）
+总字节数：假设数据类型为 FP16，每个元素占2Byte；则总字节数为
+&lt;code&gt;2*(M*K+K*N+M*N)&lt;/code&gt;&lt;/p&gt;
+&lt;h4 id=&#34;23-arithmetic-intensity&#34;&gt;2.3 Arithmetic Intensity&lt;/h4&gt;
+&lt;pre tabindex=&#34;0&#34;&gt;&lt;code&gt;Arithmetic Intensity 
+= FLOPS/Bytes
+= 2*M*N*K / (2*(M*K+K*N+M*N))
+= M*N*K / (M*K+K*N+M*N)
+\approx N/2 (When M=N, it equals)
+&lt;/code&gt;&lt;/pre&gt;&lt;p&gt;ops:byte
+V100理论算力=112 TFLOPS 显存带宽 900 GBps&lt;/p&gt;
+&lt;p&gt;V100 ops: byte=112,000/900=124.4 FLOP/Byte&lt;/p&gt;
+&lt;p&gt;实际计算中，如果算法Arithmetic Intensity比这个值大，则为math bounded, 否则为memory bounded.&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;一些例子：&lt;/strong&gt;
+小规模GEMM： &lt;code&gt;8192 * 128 * 8192 = 128/2 &amp;lt; 112&lt;/code&gt; =&amp;gt; Memory Bounded&lt;/p&gt;
+&lt;p&gt;大规模GEMM： &lt;code&gt;8192 * 8192 * 8192 = 8192/2 &amp;gt; 112&lt;/code&gt; =&amp;gt; Math Bounded&lt;/p&gt;
+&lt;p&gt;GEMV：
+M=1或者N=1，Arithmetic Intensity一般小于1，始终内存受限&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;局限性&lt;/strong&gt;
+上述计算简化的部分：&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;忽略非计算指令（指针运算、循环控制）的影响&lt;/li&gt;
+&lt;li&gt;未考虑GPU的缓存层次，比如L1，共享内存 对数据复用的优化潜力&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;实际应用的时候的优化方向：&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;Memory Bound -&amp;gt; 复用数据/混合精度&lt;/li&gt;
+&lt;li&gt;Math Bound -&amp;gt; 对齐维度/开启Tensor Core&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;Nsight &amp;amp; cuBLAS日志也可以用于验证假设&lt;/p&gt;
+&lt;h3 id=&#34;3-gpu-gemm优化办法&#34;&gt;3 GPU GEMM优化办法&lt;/h3&gt;
+&lt;h4 id=&#34;31-tile-the-output&#34;&gt;3.1 Tile the Output&lt;/h4&gt;
+&lt;p&gt;GPU伤的GEMM优化采用分块计算策略，即将结果矩阵C话费为多个Tile(Mtile x Ntile)，每个Tile由ThreadBlock负责计算。&lt;/p&gt;
+&lt;p&gt;计算流程（如Figure1）：&lt;/p&gt;
+&lt;ol&gt;
+&lt;li&gt;沿K维度分步累加：ThreadBlock逐次家在A和B的子矩阵快，执行乘加操作并累加到输出Tile&lt;/li&gt;
+&lt;li&gt;数据复用：大尺寸Tile可以提高数据在共享内存中的复用率，减小显存访问次数&lt;/li&gt;
+&lt;/ol&gt;
+&lt;p&gt;&lt;img  src=&#34;https://raw.githubusercontent.com/santiweide/santiweide.github.io/master/image/gpu.opt.matmul.tile.svg&#34;
+        alt=&#34;Figure 1: Tile outer product&#34;/&gt;&lt;/p&gt;
+&lt;h4 id=&#34;32-tensor-core&#34;&gt;3.2 Tensor Core&lt;/h4&gt;
+&lt;table&gt;
+&lt;thead&gt;
+&lt;tr&gt;
+&lt;th&gt;&lt;strong&gt;数据类型&lt;/strong&gt;&lt;/th&gt;
+&lt;th&gt;&lt;strong&gt;cuBLAS &amp;lt;11.0 / cuDNN &amp;lt;7.6.3&lt;/strong&gt;&lt;/th&gt;
+&lt;th&gt;&lt;strong&gt;cuBLAS ≥11.0 / cuDNN ≥7.6.3&lt;/strong&gt;&lt;/th&gt;
+&lt;/tr&gt;
+&lt;/thead&gt;
+&lt;tbody&gt;
+&lt;tr&gt;
+&lt;td&gt;FP16&lt;/td&gt;
+&lt;td&gt;M/N/K 对齐到 8&lt;/td&gt;
+&lt;td&gt;任意对齐，但建议对齐到 8（A100 需 64）&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;INT8&lt;/td&gt;
+&lt;td&gt;对齐到 16&lt;/td&gt;
+&lt;td&gt;建议对齐到 16（A100 需 128）&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;TF32&lt;/td&gt;
+&lt;td&gt;不支持&lt;/td&gt;
+&lt;td&gt;建议对齐到 4（A100 需 32）&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;FP64&lt;/td&gt;
+&lt;td&gt;不支持&lt;/td&gt;
+&lt;td&gt;建议对齐到 2（A100 需 16）&lt;/td&gt;
+&lt;/tr&gt;
+&lt;/tbody&gt;
+&lt;/table&gt;
+&lt;p&gt;关键维度对齐：&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;仅“内存中最快变化的维度”需要严格对齐，但是建议所有维度都对齐，以保持最佳性能。&lt;/li&gt;
+&lt;li&gt;“内存中最快变化的维度”指：
+&lt;ul&gt;
+&lt;li&gt;行优先存储(Row-major)的时候，A[i,j]存储在A[i*N+j]的位置，最快变化的维度为列为j&lt;/li&gt;
+&lt;li&gt;列优先存储(Column-major)的时候,A[i,j]存储在A[j*M+i]的位置，最快变化的维度的列为i&lt;/li&gt;
+&lt;/ul&gt;
+&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;因为TensorCore的原理，是通过Wrap-Lavel Matrix Multiply Accumulate(WMMA)执行计算，主要利用Shared Memory访存快实现性能优化；所以我们用TensorCore+对齐的矩阵Shape，本质上是希望对齐wrap的shape，减少Bank Conflict，加速wrap tile加载，并且充分利用L2 Cache和Shared Memory。&lt;/p&gt;
+&lt;p&gt;优先对齐：将 M/N/K 对齐到 16（FP16 为 8，A100 为 64）。&lt;/p&gt;
+&lt;p&gt;次优选择：若无法完全对齐，选择更小的 2 的幂次（如 4/8 字节）仍可提升性能。&lt;/p&gt;
+&lt;h4 id=&#34;32-typical-tile-dimensions-in-cublas&#34;&gt;3.2 Typical Tile Dimensions in cuBLAS&lt;/h4&gt;
+&lt;ol&gt;
+&lt;li&gt;分块尺寸选择&lt;/li&gt;
+&lt;/ol&gt;
+&lt;ul&gt;
+&lt;li&gt;大分块（如 256×128）：
+&lt;ul&gt;
+&lt;li&gt;优点：高数据复用率，减少显存带宽压力，计算效率高（图5）。&lt;/li&gt;
+&lt;li&gt;缺点：生成的分块数量少，可能导致 GPU 并行度不足（SM 利用率低）。&lt;/li&gt;
+&lt;/ul&gt;
+&lt;/li&gt;
+&lt;li&gt;小分块（如 64×64）：
+&lt;ul&gt;
+&lt;li&gt;优点：生成更多分块，提升并行度，适合小规模 GEMM。&lt;/li&gt;
+&lt;li&gt;缺点：数据复用率低，显存带宽压力大，效率下降（图5）。&lt;/li&gt;
+&lt;/ul&gt;
+&lt;/li&gt;
+&lt;/ul&gt;
+&lt;ol start=&#34;2&#34;&gt;
+&lt;li&gt;动态分块策略&lt;/li&gt;
+&lt;/ol&gt;
+&lt;ul&gt;
+&lt;li&gt;
+&lt;p&gt;启发式选择：cuBLAS 根据 GEMM 尺寸自动选择最优分块（如大 GEMM 优先使用 256×128）。&lt;/p&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;基准模式：部分框架（如 PyTorch）在训练前测试所有分块策略，选择最快实现（一次性开销）。&lt;/p&gt;
+&lt;/li&gt;
+&lt;/ul&gt;
+&lt;ol start=&#34;3&#34;&gt;
+&lt;li&gt;GEMM 规模与分块关系&lt;/li&gt;
+&lt;/ol&gt;
+&lt;ul&gt;
+&lt;li&gt;
+&lt;p&gt;大型 GEMM：适合大分块，充分占用 GPU 并行资源，接近峰值算力&lt;/p&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;小型 GEMM：需小分块提升并行度，但效率显著下降&lt;/p&gt;
+&lt;/li&gt;
+&lt;/ul&gt;
+&lt;ol start=&#34;4&#34;&gt;
+&lt;li&gt;典型分块尺寸&lt;/li&gt;
+&lt;/ol&gt;
+&lt;ul&gt;
+&lt;li&gt;优先级排序：
+&lt;ol&gt;
+&lt;li&gt;256×128 / 128×256（最高效）&lt;/li&gt;
+&lt;li&gt;128×128&lt;/li&gt;
+&lt;li&gt;256×64 / 64×256&lt;/li&gt;
+&lt;li&gt;128×64 / 64×128&lt;/li&gt;
+&lt;li&gt;64×64（最低效，仅用于极小 GEMM）&lt;/li&gt;
+&lt;/ol&gt;
+&lt;/li&gt;
+&lt;/ul&gt;
+&lt;h4 id=&#34;34-tile-size的影响&#34;&gt;3.4 tile size的影响&lt;/h4&gt;
+&lt;p&gt;当M，N都很小，但是K很大的时候，NVIDIA Library也提供了单独对K做Tile的能力。因为K是dot product的方向，所以对K Tile之后的reduction也会成为性能瓶颈。于是这个功能默认是关闭的状态。&lt;/p&gt;
+&lt;h3 id=&#34;tile-quantization&#34;&gt;Tile Quantization&lt;/h3&gt;
+&lt;p&gt;当矩阵维度（如输出矩阵的M，N）无法被Thread Block的分块大小整除的时候，导致部分分块的计算区域远小于分块容量，产生无效计算。&lt;/p&gt;
+&lt;p&gt;例：假设分块大小为128x128，若矩阵维度为192x192，则需要划分为4个分块（2x2布局），但第二个分块并没有利用充分（192-128=64）&lt;/p&gt;
+&lt;p&gt;影响：&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;无效计算增加：所有分块执行相同量的Math Ops，但部分分块的Tile有效计算占比较低。&lt;/li&gt;
+&lt;li&gt;吞吐骤降：当分块数量不变但有效数据减少的时候，实际FLOPS显著降低。&lt;/li&gt;
+&lt;li&gt;执行时间固定：只要分块数量不变，总时间基本不变&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;例：
+考虑GEMM&lt;/p&gt;
+&lt;pre tabindex=&#34;0&#34;&gt;&lt;code&gt;M=27648
+K=4096
+Tile Size 256×128
+&lt;/code&gt;&lt;/pre&gt;&lt;p&gt;当&lt;code&gt;N=128-&amp;gt;136&lt;/code&gt;，&lt;code&gt;Tile Number=1-&amp;gt;2&lt;/code&gt;但第二个Tile仅含有&lt;code&gt;6.25%&lt;/code&gt;有效数据，导致吞吐骤降&lt;/p&gt;
+&lt;p&gt;优化策略：&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;对齐矩阵维度：确保M，N为分块大小的整数倍（cuBLAS因此默认选择更小的分块大小，如&lt;code&gt;64x64&lt;/code&gt;，以减少浪费）&lt;/li&gt;
+&lt;li&gt;动态分块选择：依赖cuBLAS的启发式算法或框架的bencmark模式自动优化&lt;/li&gt;
+&lt;/ul&gt;
+&lt;h3 id=&#34;wave-quantization&#34;&gt;Wave Quantization&lt;/h3&gt;
+&lt;p&gt;由于total Thread Block数量需要和GPU的SM数量对齐，才能尽量让Tail Wave中的SM充分利用，所以我们一般希望总Thread Block数量为Wave的整数倍。&lt;/p&gt;
+&lt;p&gt;例：&lt;/p&gt;
+&lt;pre tabindex=&#34;0&#34;&gt;&lt;code&gt;M=2304
+Tile Size=256x128
+当N=1536, # ThreadBlock = 108
+当N=1664, # ThreadBlock = 117，存在一个仅有9个thread的Tail Wave
+&lt;/code&gt;&lt;/pre&gt;&lt;p&gt;Tail Wave会导致FLOPS骤降，也会增加总体执行时间。&lt;/p&gt;
+&lt;p&gt;优化策略：&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;设计FEMM规模，s.t. #Thread Block = #SM的整数倍&lt;/li&gt;
+&lt;li&gt;调整ThreadBlock Size，比如用更小的Thread Block划分方式来增加Thread Block数量，减小Tile Wave浪费&lt;/li&gt;
+&lt;/ul&gt;
+&lt;table&gt;
+&lt;thead&gt;
+&lt;tr&gt;
+&lt;th&gt;特性&lt;/th&gt;
+&lt;th&gt;分块量化（Tile Quantization）&lt;/th&gt;
+&lt;th&gt;波量化（Wave Quantization）&lt;/th&gt;
+&lt;/tr&gt;
+&lt;/thead&gt;
+&lt;tbody&gt;
+&lt;tr&gt;
+&lt;td&gt;量化对象&lt;/td&gt;
+&lt;td&gt;矩阵维度与分块大小的对齐性&lt;/td&gt;
+&lt;td&gt;总线程块数与 GPU #SM的对齐性&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;核心问题&lt;/td&gt;
+&lt;td&gt;Tile内有效计算占比低&lt;/td&gt;
+&lt;td&gt;Tail Wave SM 利用率低&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;性能表现&lt;/td&gt;
+&lt;td&gt;GFLOPS 随维度未对齐骤降&lt;/td&gt;
+&lt;td&gt;GFLOPS 在Wave边界处跳变&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;优化目标&lt;/td&gt;
+&lt;td&gt;对齐矩阵维度至Tile大小&lt;/td&gt;
+&lt;td&gt;控制#ThreadBlock为#SM的整数倍&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;cuBLAS 应对策略&lt;/td&gt;
+&lt;td&gt;自动选择更小Tile（如 64×64）&lt;/td&gt;
+&lt;td&gt;动态调整分块策略以平衡并行度与利用率&lt;/td&gt;
+&lt;/tr&gt;
+&lt;/tbody&gt;
+&lt;/table&gt;
+&lt;h3 id=&#34;总结&#34;&gt;总结&lt;/h3&gt;
+&lt;ol&gt;
+&lt;li&gt;优先对齐维度&lt;/li&gt;
+&lt;/ol&gt;
+&lt;ul&gt;
+&lt;li&gt;Tile Quantization：确保 M、N 为分块大小的整数倍（如 128×128）。&lt;/li&gt;
+&lt;li&gt;Wave Quantization：设计 GEMM 规模使线程块总数接近 SM 数量的整数倍（如 A100 上为 108 的倍数）。&lt;/li&gt;
+&lt;/ul&gt;
+&lt;ol start=&#34;2&#34;&gt;
+&lt;li&gt;Dynamic tile分块选择&lt;/li&gt;
+&lt;/ol&gt;
+&lt;ul&gt;
+&lt;li&gt;大型 GEMM 使用大分块（256×128）提升效率，小型 GEMM 使用小分块（64×64）增加并行度。&lt;/li&gt;
+&lt;li&gt;启用框架的“benchmark”自动选择最优分块策略。&lt;/li&gt;
+&lt;/ul&gt;
+&lt;ol start=&#34;3&#34;&gt;
+&lt;li&gt;硬件适配&lt;/li&gt;
+&lt;/ol&gt;
+&lt;ul&gt;
+&lt;li&gt;在 A100 等高端 GPU 上，利用更大对齐粒度（如 FP16 对齐到 64 元素）优化显存带宽。&lt;/li&gt;
+&lt;/ul&gt;
+&lt;ol start=&#34;4&#34;&gt;
+&lt;li&gt;监控与验证&lt;/li&gt;
+&lt;/ol&gt;
+&lt;ul&gt;
+&lt;li&gt;使用性能分析工具（Nsight Systems）观察分块策略与 SM 利用率。&lt;/li&gt;
+&lt;li&gt;结合 cuBLAS 日志验证实际分块选择是否符合预期。&lt;/li&gt;
+&lt;/ul&gt;
+</description>
+    </item>
     
     <item>
       <title>快速诊断GPU性能瓶颈</title>
@@ -17,7 +303,7 @@
       <pubDate>Tue, 11 Feb 2025 20:20:18 +0100</pubDate>
       
       <guid>https://santiweide.github.io/post/20250211.gpu.opt/</guid>
-      <description>&lt;p&gt;GPU性能瓶颈主要分为3类：Latency Bound 延迟平静, Math Bound计算平静, Memory Bound 内存瓶颈。&lt;/p&gt;
+      <description>&lt;p&gt;GPU性能瓶颈主要分为3类：Latency Bound, Math Bound, Memory Bound。&lt;/p&gt;
 &lt;h3 id=&#34;1-诊断步骤&#34;&gt;1 诊断步骤：&lt;/h3&gt;
 &lt;p&gt;&lt;strong&gt;1.1 评估硬件参数&lt;/strong&gt;&lt;/p&gt;
 &lt;ul&gt;
@@ -88,6 +374,7 @@
 &lt;/ul&gt;
 &lt;/li&gt;
 &lt;/ul&gt;
+&lt;p&gt;&lt;a href=&#34;../20250213.gpu.opt.matmul/&#34;&gt;样例：矩阵乘法&lt;/a&gt;&lt;/p&gt;
 </description>
     </item>
     
@@ -325,55 +612,6 @@ Career Fair这个词语好极了，不像人才市场那样苦嗦嗦。第一次
 &lt;p&gt;想来当初妻子阿姨小男孩婆婆交代小男孩和自己丈夫外出的事情的时候，措辞是“自己丈夫带小男孩去海边”——没有直接说去找妈妈可能也是一种贴心吧。&lt;/p&gt;
 &lt;p&gt;part5&lt;/p&gt;
 &lt;p&gt;想来这是一部大家的名字似乎被隐去的电影。混混大叔管小男孩叫“小子”，小男孩管混混大叔叫“叔叔”。直到故事结尾，小男孩要和混混大叔告别了，问混混大叔叫什么，才知道，原来是混混大叔叫菊次郎啊！自己度过的夏天，是和菊次郎一起度过的夏天，也是菊次郎的夏天。&lt;/p&gt;
-</description>
-    </item>
-    
-    <item>
-      <title>Didi老师六则</title>
-      <link>https://santiweide.github.io/post/202404/</link>
-      <pubDate>Mon, 08 Apr 2024 10:29:04 +0100</pubDate>
-      
-      <guid>https://santiweide.github.io/post/202404/</guid>
-      <description>&lt;h3 id=&#34;1&#34;&gt;1&lt;/h3&gt;
-&lt;p&gt;Didi老师：你确定你去攀岩姐姐家只是看猫猫吗&lt;/p&gt;
-&lt;p&gt;我：（笑）还睡觉了嘛，不然怎么那么早就在她家了&lt;/p&gt;
-&lt;p&gt;Didi老师：胡老师，你不要再跟身边的人睡觉了！&lt;/p&gt;
-&lt;p&gt;Didi老师：那你和韩老师的关系到底是什么样的？&lt;/p&gt;
-&lt;p&gt;我：🤔我得去问下她的想法&lt;/p&gt;
-&lt;p&gt;Didi老师：？你要去直接问她，我们现在是什么关系吗？&lt;/p&gt;
-&lt;p&gt;（这是主动出击push人家确认关系吧！）&lt;/p&gt;
-&lt;h3 id=&#34;2&#34;&gt;2&lt;/h3&gt;
-&lt;p&gt;（背景：Didi老师的mentor经常说一些垃圾话&lt;del&gt;勾引Didi&lt;/del&gt;。Didi老师一直忍气吞声，谁叫人家是她领导。不过，Didi老师还是会给mentor拿橘子之类的；因为mentor在减肥，Didi老师晚上也会给mentor带晚饭；Didi老师的mentor只允许自己晚上吃一个玉米和一个鸡蛋，并且嘱咐Didi老师，如果看到自己偷吃，就骂她。）&lt;/p&gt;
-&lt;p&gt;我：你和你mentor现在咋样了？&lt;/p&gt;
-&lt;p&gt;Didi老师：别提了，mentor昨天说梦到自己在吃好吃的，然后我出现了，告诉她别吃了…..&lt;/p&gt;
-&lt;p&gt;（笑疯了，怎么梦里也是这个play啊！）&lt;/p&gt;
-&lt;p&gt;Didi老师上周和一群直男直女去酒吧，结果大家进去之后，女生们都在享受男生的身体，只有Didi在那里百无聊赖。凌晨五点，Didi老师和两对情侣往回走，两对情侣在路上热吻拥抱，把Didi老师夹在中间；Didi老师为了不撞到他们还得保持均匀的走路速度…….&lt;/p&gt;
-&lt;p&gt;评：可以颁发一个最佳陪伴奖&lt;/p&gt;
-&lt;h3 id=&#34;3&#34;&gt;3&lt;/h3&gt;
-&lt;p&gt;Didi老师：你在攀岩姐姐家不会也是做0吧&lt;/p&gt;
-&lt;p&gt;我：我们可是0.5！！&lt;/p&gt;
-&lt;p&gt;Didi老师：我是说，做0没有什么好羞耻的，坦然一点就好&lt;/p&gt;
-&lt;p&gt;我：…..&lt;/p&gt;
-&lt;h3 id=&#34;4&#34;&gt;4&lt;/h3&gt;
-&lt;p&gt;（背景：Didi老师滑雪，左手大拇指轻微骨折）&lt;/p&gt;
-&lt;p&gt;Didi老师mentor：你怎么洗澡？&lt;/p&gt;
-&lt;p&gt;Didi老师：（? Are you offering to wash my body?）…..&lt;/p&gt;
-&lt;p&gt;Didi老师同事：你是T吗？&lt;/p&gt;
-&lt;p&gt;Didi老师：不是。&lt;/p&gt;
-&lt;p&gt;于是Didi老师同事转头跟其他人说，Didi老师是P。&lt;/p&gt;
-&lt;p&gt;Didi老师遛弯的时候面容苦涩：现在全公司都知道我在外面做0了…..&lt;/p&gt;
-&lt;h3 id=&#34;5&#34;&gt;5&lt;/h3&gt;
-&lt;p&gt;我：感觉和攀岩姐姐相处的时候可以跟她说我喜欢的人是谁，比如我喜欢网易妹妹啊，喜欢Zoe啊，什么的。&lt;/p&gt;
-&lt;p&gt;Didi老师：什么，你喜欢Zoe？不是说好了要给我留着吗！&lt;/p&gt;
-&lt;p&gt;我：哎呀哎呀…Zoe就是欣赏啦……&lt;/p&gt;
-&lt;h3 id=&#34;6&#34;&gt;6&lt;/h3&gt;
-&lt;p&gt;（遛弯的时候在小花园遥远地看到了我的经理，一下子180度原地向后转把Didi老师拉走小公园）&lt;/p&gt;
-&lt;p&gt;我：快走快走前面是我的经理！！！&lt;/p&gt;
-&lt;p&gt;Didi老师：（愣住）笑死，你就像那个逃学遇到老师的小学生&lt;/p&gt;
-&lt;p&gt;我：（嘴上强装镇定）不想跟经理搭讪而已，也没有那么害怕遇到啦（身体很诚实向出口狂奔）&lt;/p&gt;
-&lt;p&gt;Didi老师：（坏笑）既然不害怕，我想去那边转转，我们去吧（拉我去小公园深处）&lt;/p&gt;
-&lt;p&gt;我：不要！！！！！&lt;/p&gt;
-&lt;p&gt;我想那个时候，我表情一定美丽极了。&lt;/p&gt;
 </description>
     </item>
     

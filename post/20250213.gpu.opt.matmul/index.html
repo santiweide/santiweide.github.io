@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="en"><meta charset="utf-8"><meta name="generator" content="Hugo 0.133.0"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="supported-color-schemes" content="light dark"><title>GPU性能-矩阵乘法&nbsp;&ndash;&nbsp;santiweide&#39;s Blog</title><link rel="stylesheet" href="/css/core.min.003a667cf21024ef30f2985fb57c9bd6f6873cf899ee14e9302e68e9f04b681df9440cec4ebdaa101dca533a262c242f.css" integrity="sha384-ADpmfPIQJO8w8phftXyb1vaHPPiZ7hTpMC5o6fBLaB35RAzsTr2qEB3KUzomLCQv"><meta name="twitter:card" content="summary" />
+<meta name="twitter:title" content="GPU性能-矩阵乘法" /><body><section id="header">
+    <div class="header wrap"><span class="header left-side"><a class="site home" href="/"><span class="site name">santiweide's Blog</span></a></span>
+        <span class="header right-side"><div class="nav wrap"><nav class="nav"><a class="nav item" href="/tags/">Tags</a><a class="nav item" href="/about">About</a><a class="nav item" href="/friend">友链</a><a class="nav item" href="https://gohugo%2eio/"target="_blank" rel="noopener noreferrer">Hugo</a></nav></div></span></div><div class="site slogan"><span class="title">露の世は露の世ながらさりながら</span></div></section><section id="content"><div class="article-container"><section class="article header">
+    <h1 class="article title">GPU性能-矩阵乘法</h1><p class="article date">Thursday, February 13, 2025</p></section><article class="article markdown-body"><!-- TOC start (generated with https://github.com/derlin/bitdowntoc) -->
+<ul>
+<li><a href="#acronyms">Acronyms</a></li>
+<li><a href="#2-">2 理论：计算和内存瓶颈分析</a>
+<ul>
+<li><a href="#21-">2.1 计算量评估</a></li>
+<li><a href="#22-bytes">2.2 内存访问量评估（Bytes）</a></li>
+<li><a href="#23-arithmetic-intensity">2.3 Arithmetic Intensity</a></li>
+</ul>
+</li>
+<li><a href="#3-gpu-gemm">3 GPU GEMM优化办法</a>
+<ul>
+<li><a href="#31-tile-the-output">3.1 Tile the Output</a></li>
+<li><a href="#32-tensor-core">3.2 Tensor Core</a></li>
+<li><a href="#32-typical-tile-dimensions-in-cublas">3.2 Typical Tile Dimensions in cuBLAS</a></li>
+<li><a href="#tile-size">3.4 tile size的影响</a></li>
+</ul>
+</li>
+<li><a href="#tile-quantization">Tile Quantization</a></li>
+<li><a href="#wave-quantization">Wave Quantization</a></li>
+<li><a href="#">总结</a></li>
+</ul>
+<!-- TOC end -->
+<h3 id="acronyms">Acronyms</h3>
+<p>GEMMs: General Matrix Multiplications</p>
+<p>矩阵乘法在Fully connected layers, Recurrent Layers等计算操作中广为使用，用于计算：
+<code>$C = \alpha AB + \beta C$</code>，其中A和B是matrix inputs，<code>\alpha</code> 和<code>\beta</code>是scalar inputs，C是一个pre-existing matrix，未来会被计算output覆盖</p>
+<p>FC的forward pass中，weight matrix为arguement A，activation为B，\aplha和\bate分别为1，0如果把skip-connection + linear operation加起来的话，\beta也会是1.</p>
+<h3 id="2-理论计算和内存瓶颈分析">2 理论：计算和内存瓶颈分析</h3>
+<h4 id="21-计算量评估">2.1 计算量评估</h4>
+<p>Assume:</p>
+<pre tabindex="0"><code>A: M * N
+B: N * K
+C: M * K
+</code></pre><p>则矩阵乘法C=AxB 在FMA中计算量共<code>M*N*K</code> 次</p>
+<p>因为每个元素<code>Cij</code>需要累加N次乘法，每次取A的一行和B的一列相乘。而C一共有<code>M*K</code>个元素，所以一共的操作数是<code>M*N*K</code></p>
+<p>每个FMA包含1次乘法1次加法，共 <code>2*M*N*K</code> FLOPS</p>
+<h4 id="22-内存访问量评估bytes">2.2 内存访问量评估（Bytes）</h4>
+<p>输入数据：load A （MxK元素）和B（KxN元素）
+输出数据：write C（MxN元素）
+总字节数：假设数据类型为 FP16，每个元素占2Byte；则总字节数为
+<code>2*(M*K+K*N+M*N)</code></p>
+<h4 id="23-arithmetic-intensity">2.3 Arithmetic Intensity</h4>
+<pre tabindex="0"><code>Arithmetic Intensity 
+= FLOPS/Bytes
+= 2*M*N*K / (2*(M*K+K*N+M*N))
+= M*N*K / (M*K+K*N+M*N)
+\approx N/2 (When M=N, it equals)
+</code></pre><p>ops:byte
+V100理论算力=112 TFLOPS 显存带宽 900 GBps</p>
+<p>V100 ops: byte=112,000/900=124.4 FLOP/Byte</p>
+<p>实际计算中，如果算法Arithmetic Intensity比这个值大，则为math bounded, 否则为memory bounded.</p>
+<p><strong>一些例子：</strong>
+小规模GEMM： <code>8192 * 128 * 8192 = 128/2 &lt; 112</code> =&gt; Memory Bounded</p>
+<p>大规模GEMM： <code>8192 * 8192 * 8192 = 8192/2 &gt; 112</code> =&gt; Math Bounded</p>
+<p>GEMV：
+M=1或者N=1，Arithmetic Intensity一般小于1，始终内存受限</p>
+<p><strong>局限性</strong>
+上述计算简化的部分：</p>
+<ul>
+<li>忽略非计算指令（指针运算、循环控制）的影响</li>
+<li>未考虑GPU的缓存层次，比如L1，共享内存 对数据复用的优化潜力</li>
+</ul>
+<p>实际应用的时候的优化方向：</p>
+<ul>
+<li>Memory Bound -&gt; 复用数据/混合精度</li>
+<li>Math Bound -&gt; 对齐维度/开启Tensor Core</li>
+</ul>
+<p>Nsight &amp; cuBLAS日志也可以用于验证假设</p>
+<h3 id="3-gpu-gemm优化办法">3 GPU GEMM优化办法</h3>
+<h4 id="31-tile-the-output">3.1 Tile the Output</h4>
+<p>GPU伤的GEMM优化采用分块计算策略，即将结果矩阵C话费为多个Tile(Mtile x Ntile)，每个Tile由ThreadBlock负责计算。</p>
+<p>计算流程（如Figure1）：</p>
+<ol>
+<li>沿K维度分步累加：ThreadBlock逐次家在A和B的子矩阵快，执行乘加操作并累加到输出Tile</li>
+<li>数据复用：大尺寸Tile可以提高数据在共享内存中的复用率，减小显存访问次数</li>
+</ol>
+<p><img  src="https://raw.githubusercontent.com/santiweide/santiweide.github.io/master/image/gpu.opt.matmul.tile.svg"
+        alt="Figure 1: Tile outer product"/></p>
+<h4 id="32-tensor-core">3.2 Tensor Core</h4>
+<table>
+<thead>
+<tr>
+<th><strong>数据类型</strong></th>
+<th><strong>cuBLAS &lt;11.0 / cuDNN &lt;7.6.3</strong></th>
+<th><strong>cuBLAS ≥11.0 / cuDNN ≥7.6.3</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>FP16</td>
+<td>M/N/K 对齐到 8</td>
+<td>任意对齐，但建议对齐到 8（A100 需 64）</td>
+</tr>
+<tr>
+<td>INT8</td>
+<td>对齐到 16</td>
+<td>建议对齐到 16（A100 需 128）</td>
+</tr>
+<tr>
+<td>TF32</td>
+<td>不支持</td>
+<td>建议对齐到 4（A100 需 32）</td>
+</tr>
+<tr>
+<td>FP64</td>
+<td>不支持</td>
+<td>建议对齐到 2（A100 需 16）</td>
+</tr>
+</tbody>
+</table>
+<p>关键维度对齐：</p>
+<ul>
+<li>仅“内存中最快变化的维度”需要严格对齐，但是建议所有维度都对齐，以保持最佳性能。</li>
+<li>“内存中最快变化的维度”指：
+<ul>
+<li>行优先存储(Row-major)的时候，A[i,j]存储在A[i*N+j]的位置，最快变化的维度为列为j</li>
+<li>列优先存储(Column-major)的时候,A[i,j]存储在A[j*M+i]的位置，最快变化的维度的列为i</li>
+</ul>
+</li>
+</ul>
+<p>因为TensorCore的原理，是通过Wrap-Lavel Matrix Multiply Accumulate(WMMA)执行计算，主要利用Shared Memory访存快实现性能优化；所以我们用TensorCore+对齐的矩阵Shape，本质上是希望对齐wrap的shape，减少Bank Conflict，加速wrap tile加载，并且充分利用L2 Cache和Shared Memory。</p>
+<p>优先对齐：将 M/N/K 对齐到 16（FP16 为 8，A100 为 64）。</p>
+<p>次优选择：若无法完全对齐，选择更小的 2 的幂次（如 4/8 字节）仍可提升性能。</p>
+<h4 id="32-typical-tile-dimensions-in-cublas">3.2 Typical Tile Dimensions in cuBLAS</h4>
+<ol>
+<li>分块尺寸选择</li>
+</ol>
+<ul>
+<li>大分块（如 256×128）：
+<ul>
+<li>优点：高数据复用率，减少显存带宽压力，计算效率高（图5）。</li>
+<li>缺点：生成的分块数量少，可能导致 GPU 并行度不足（SM 利用率低）。</li>
+</ul>
+</li>
+<li>小分块（如 64×64）：
+<ul>
+<li>优点：生成更多分块，提升并行度，适合小规模 GEMM。</li>
+<li>缺点：数据复用率低，显存带宽压力大，效率下降（图5）。</li>
+</ul>
+</li>
+</ul>
+<ol start="2">
+<li>动态分块策略</li>
+</ol>
+<ul>
+<li>
+<p>启发式选择：cuBLAS 根据 GEMM 尺寸自动选择最优分块（如大 GEMM 优先使用 256×128）。</p>
+</li>
+<li>
+<p>基准模式：部分框架（如 PyTorch）在训练前测试所有分块策略，选择最快实现（一次性开销）。</p>
+</li>
+</ul>
+<ol start="3">
+<li>GEMM 规模与分块关系</li>
+</ol>
+<ul>
+<li>
+<p>大型 GEMM：适合大分块，充分占用 GPU 并行资源，接近峰值算力</p>
+</li>
+<li>
+<p>小型 GEMM：需小分块提升并行度，但效率显著下降</p>
+</li>
+</ul>
+<ol start="4">
+<li>典型分块尺寸</li>
+</ol>
+<ul>
+<li>优先级排序：
+<ol>
+<li>256×128 / 128×256（最高效）</li>
+<li>128×128</li>
+<li>256×64 / 64×256</li>
+<li>128×64 / 64×128</li>
+<li>64×64（最低效，仅用于极小 GEMM）</li>
+</ol>
+</li>
+</ul>
+<h4 id="34-tile-size的影响">3.4 tile size的影响</h4>
+<p>当M，N都很小，但是K很大的时候，NVIDIA Library也提供了单独对K做Tile的能力。因为K是dot product的方向，所以对K Tile之后的reduction也会成为性能瓶颈。于是这个功能默认是关闭的状态。</p>
+<h3 id="tile-quantization">Tile Quantization</h3>
+<p>当矩阵维度（如输出矩阵的M，N）无法被Thread Block的分块大小整除的时候，导致部分分块的计算区域远小于分块容量，产生无效计算。</p>
+<p>例：假设分块大小为128x128，若矩阵维度为192x192，则需要划分为4个分块（2x2布局），但第二个分块并没有利用充分（192-128=64）</p>
+<p>影响：</p>
+<ul>
+<li>无效计算增加：所有分块执行相同量的Math Ops，但部分分块的Tile有效计算占比较低。</li>
+<li>吞吐骤降：当分块数量不变但有效数据减少的时候，实际FLOPS显著降低。</li>
+<li>执行时间固定：只要分块数量不变，总时间基本不变</li>
+</ul>
+<p>例：
+考虑GEMM</p>
+<pre tabindex="0"><code>M=27648
+K=4096
+Tile Size 256×128
+</code></pre><p>当<code>N=128-&gt;136</code>，<code>Tile Number=1-&gt;2</code>但第二个Tile仅含有<code>6.25%</code>有效数据，导致吞吐骤降</p>
+<p>优化策略：</p>
+<ul>
+<li>对齐矩阵维度：确保M，N为分块大小的整数倍（cuBLAS因此默认选择更小的分块大小，如<code>64x64</code>，以减少浪费）</li>
+<li>动态分块选择：依赖cuBLAS的启发式算法或框架的bencmark模式自动优化</li>
+</ul>
+<h3 id="wave-quantization">Wave Quantization</h3>
+<p>由于total Thread Block数量需要和GPU的SM数量对齐，才能尽量让Tail Wave中的SM充分利用，所以我们一般希望总Thread Block数量为Wave的整数倍。</p>
+<p>例：</p>
+<pre tabindex="0"><code>M=2304
+Tile Size=256x128
+当N=1536, # ThreadBlock = 108
+当N=1664, # ThreadBlock = 117，存在一个仅有9个thread的Tail Wave
+</code></pre><p>Tail Wave会导致FLOPS骤降，也会增加总体执行时间。</p>
+<p>优化策略：</p>
+<ul>
+<li>设计FEMM规模，s.t. #Thread Block = #SM的整数倍</li>
+<li>调整ThreadBlock Size，比如用更小的Thread Block划分方式来增加Thread Block数量，减小Tile Wave浪费</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>特性</th>
+<th>分块量化（Tile Quantization）</th>
+<th>波量化（Wave Quantization）</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>量化对象</td>
+<td>矩阵维度与分块大小的对齐性</td>
+<td>总线程块数与 GPU #SM的对齐性</td>
+</tr>
+<tr>
+<td>核心问题</td>
+<td>Tile内有效计算占比低</td>
+<td>Tail Wave SM 利用率低</td>
+</tr>
+<tr>
+<td>性能表现</td>
+<td>GFLOPS 随维度未对齐骤降</td>
+<td>GFLOPS 在Wave边界处跳变</td>
+</tr>
+<tr>
+<td>优化目标</td>
+<td>对齐矩阵维度至Tile大小</td>
+<td>控制#ThreadBlock为#SM的整数倍</td>
+</tr>
+<tr>
+<td>cuBLAS 应对策略</td>
+<td>自动选择更小Tile（如 64×64）</td>
+<td>动态调整分块策略以平衡并行度与利用率</td>
+</tr>
+</tbody>
+</table>
+<h3 id="总结">总结</h3>
+<ol>
+<li>优先对齐维度</li>
+</ol>
+<ul>
+<li>Tile Quantization：确保 M、N 为分块大小的整数倍（如 128×128）。</li>
+<li>Wave Quantization：设计 GEMM 规模使线程块总数接近 SM 数量的整数倍（如 A100 上为 108 的倍数）。</li>
+</ul>
+<ol start="2">
+<li>Dynamic tile分块选择</li>
+</ol>
+<ul>
+<li>大型 GEMM 使用大分块（256×128）提升效率，小型 GEMM 使用小分块（64×64）增加并行度。</li>
+<li>启用框架的“benchmark”自动选择最优分块策略。</li>
+</ul>
+<ol start="3">
+<li>硬件适配</li>
+</ol>
+<ul>
+<li>在 A100 等高端 GPU 上，利用更大对齐粒度（如 FP16 对齐到 64 元素）优化显存带宽。</li>
+</ul>
+<ol start="4">
+<li>监控与验证</li>
+</ol>
+<ul>
+<li>使用性能分析工具（Nsight Systems）观察分块策略与 SM 利用率。</li>
+<li>结合 cuBLAS 日志验证实际分块选择是否符合预期。</li>
+</ul>
+</article><section class="article labels"><a class="tag" href=/tags/gpu/>GPU</a></section>
+</div>
+<div class="article bottom"><section class="article navigation"><p><a class="link" href="/post/20250211.gpu.opt/"><span class="iconfont icon-article"></span>快速诊断GPU性能瓶颈</a></p></section></div></section><section id="footer"><div class="footer-wrap">
+    <p class="copyright">©2019 Notepadium.</p>
+    <p class="powerby"><span>Powered&nbsp;by&nbsp;</span><a href="https://gohugo.io" 
+        target="_blank" rel="noopener noreferrer">Hugo</a><span>&nbsp;&amp;&nbsp;</span><a href="https://themes.gohugo.io/hugo-notepadium/" 
+        target="_blank" rel="noopener noreferrer">Notepadium</a>
+<a href='https://ipv6-test.com/validate.php?url=referer'
+  ><img src='https://ipv6-test.com/button-ipv6-80x15.png' 
+        alt='ipv6 ready' title='ipv6 ready' border='0' 
+/></a>
+</p></div></section>
+  
+
+</body>
+
+</html>
