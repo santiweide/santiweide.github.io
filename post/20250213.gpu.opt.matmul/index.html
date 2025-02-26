@@ -184,7 +184,7 @@ M=1或者N=1，Arithmetic Intensity一般小于1，始终内存受限</p>
 </li>
 </ul>
 <h4 id="34-tile-size的影响">3.4 tile size的影响</h4>
-<p>当M，N都很小，但是K很大的时候，NVIDIA Library也提供了单独对K做Tile的能力。因为K是dot product的方向，所以对K Tile之后的reduction也会成为性能瓶颈。于是这个功能默认是关闭的状态。</p>
+<p>当M，N都很小，但是K很大的时候，NVIDIA Library也提供了单独对K做Tile的能力。因为K是dot product的方向，所以对K Tile之后的reduction也会成为性能瓶颈；这个功能默认是关闭的状态。</p>
 <h3 id="tile-quantization">Tile Quantization</h3>
 <p>当矩阵维度（如输出矩阵的M，N）无法被Thread Block的分块大小整除的时候，导致部分分块的计算区域远小于分块容量，产生无效计算。</p>
 <p>例：假设分块大小为128x128，若矩阵维度为192x192，则需要划分为4个分块（2x2布局），但第二个分块并没有利用充分（192-128=64）</p>
